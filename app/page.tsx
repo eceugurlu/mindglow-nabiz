@@ -1,65 +1,92 @@
-import Image from "next/image";
+'use client';
+import { useState, useRef } from 'react';
 
-export default function Home() {
+export default function NabizDemo() {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
+  
+  // MP4 (video) formatı çaldığımız için video referansı kullanıyoruz
+  const videoRef = useRef<HTMLVideoElement | null>(null); 
+
+  const startExperience = () => {
+    if (videoRef.current) {
+      videoRef.current.volume = 0.5;
+      videoRef.current.play();
+      setIsPlaying(true);
+
+      // TAM 1 DAKİKA (60.000 milisaniye) SONRA ÇALIŞACAK ZAMANLAYICI
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.pause(); // Sesi durdur
+        }
+        setIsPlaying(false); // Nabız animasyonunu kapat
+        setIsFinished(true); // Final ekranını göster
+      }, 60000); 
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="flex flex-col items-center justify-center min-h-screen bg-[#1E1B3A] text-[#F5F3FF] overflow-hidden">
+      
+      {/* 
+        GİZLİ VİDEO OYNATICI VE R2 LİNKİN
+        Eğer R2'daki dosyanın adı farklıysa, aşağıdaki linkin en sonundaki 'weightless.mp4' kısmını kendi dosya adınla değiştir.
+      */}
+      <video 
+        ref={videoRef} 
+        src="https://pub-748f7570433143eaa18b42464d98a818.r2.dev/weightless.mp4" 
+        loop 
+        playsInline 
+        className="hidden" 
+      />
+
+      {/* DURUM 1: Başlangıç Ekranı */}
+      {!isPlaying && !isFinished && (
+        <div className="flex flex-col items-center text-center px-6">
+          <h1 className="text-3xl font-semibold mb-2 tracking-wide">MindGlow</h1>
+          <p className="text-[#C4B5FD] font-light mb-12">Sınav stresi görünmezdir. Kalbin hariç.</p>
+          <button
+            onClick={startExperience}
+            className="px-10 py-4 bg-[#FB7185] text-white rounded-full font-medium text-lg animate-pulse shadow-[0_0_30px_rgba(251,113,133,0.4)]"
+          >
+            Nabzını Hisset
+          </button>
+        </div>
+      )}
+
+      {/* DURUM 2: 1 Dakikalık Nabız Animasyonu */}
+      {isPlaying && (
+        <div className="flex flex-col items-center">
+          <p className="mb-12 text-xl font-light tracking-widest text-[#C4B5FD] animate-pulse">
+            Kulaklığını tak. Derin bir nefes al...
           </p>
+          
+          <div className="relative w-64 h-32 flex items-center justify-center">
+             <svg className="w-full h-full drop-shadow-[0_0_15px_rgba(251,113,133,0.6)]" viewBox="0 0 500 100">
+                <polyline
+                  fill="none"
+                  stroke="#FB7185"
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  points="0,50 150,50 170,20 200,90 230,10 260,80 280,50 500,50"
+                  className="animate-[pulse_1.5s_ease-in-out_infinite]"
+                />
+              </svg>
+          </div>
+          
+          <p className="mt-12 text-sm text-[#8B5CF6] font-mono">BPM YAVAŞLIYOR</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      )}
+
+      {/* DURUM 3: 1 Dakika Dolduktan Sonra Çıkacak Final Ekranı */}
+      {isFinished && (
+        <div className="flex flex-col items-center text-center px-6 animate-[fadeIn_1s_ease-in-out]">
+          <h2 className="text-3xl font-semibold mb-4 text-[#FB7185]">Nabız Dengelendi.</h2>
+          <p className="text-[#C4B5FD] font-light text-lg">MindGlow ile kontrol hep sende.</p>
         </div>
-      </main>
+      )}
+
     </div>
   );
 }
