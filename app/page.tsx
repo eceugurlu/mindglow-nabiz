@@ -6,16 +6,14 @@ import { useState, useRef, useEffect, useCallback } from 'react';
    MindGlow · NABIZ
    Gerçek kamera nabız ölçümü (PPG) + ÖLÇ → SAKİNLEŞ → TEKRAR ÖLÇ
    kanıt akışı + sahnede çökmeyen otomatik demo modu.
-   Not: Kamera erişimi için https VEYA localhost gerekir.
-   Flaş (torch) çoğunlukla Android Chrome'da çalışır; iOS Safari'de
-   çalışmazsa ortam ışığıyla dener, sinyal zayıfsa demo moduna düşer.
+   Kamera erişimi için https VEYA localhost gerekir.
+   Flaş (torch) çoğunlukla Android Chrome'da çalışır.
    ============================================================ */
 
-const RESET_DURATION = 30; // saniye (nefes + Kalbinin Şarkısı)
+const RESET_DURATION = 30;
 const MEASURE_MS_REAL = 14000;
 const MEASURE_MS_DEMO = 6500;
 
-// nefes 4-4-6-2
 const PHASES = [
   { key: 'in', label: 'Nefes al', dur: 4, from: 0.6, to: 1.0 },
   { key: 'hold', label: 'Tut', dur: 4, from: 1.0, to: 1.0 },
@@ -50,7 +48,6 @@ function lerpColor(a: string, b: string, t: number) {
   return `rgb(${r},${g},${c})`;
 }
 
-/* ---- PPG: ham kırmızı-kanal sinyalinden BPM tahmini ---- */
 function estimateBpm(sig: { t: number; v: number }[]): number {
   if (sig.length < 40) return 0;
   const times = sig.map((s) => s.t);
@@ -58,8 +55,6 @@ function estimateBpm(sig: { t: number; v: number }[]): number {
   const seconds = (times[times.length - 1] - times[0]) / 1000;
   if (seconds < 6) return 0;
   const fps = vals.length / seconds;
-
-  // ~0.5 sn pencereyle detrend (taban kaymasını sil)
   const win = Math.max(3, Math.round(fps * 0.5));
   const detr: number[] = [];
   for (let i = 0; i < vals.length; i++) {
@@ -67,7 +62,6 @@ function estimateBpm(sig: { t: number; v: number }[]): number {
     for (let j = Math.max(0, i - win); j <= Math.min(vals.length - 1, i + win); j++) { s += vals[j]; c++; }
     detr.push(vals[i] - s / c);
   }
-  // küçük yumuşatma
   const sm: number[] = [];
   for (let i = 0; i < detr.length; i++) {
     let s = 0, c = 0;
@@ -76,7 +70,7 @@ function estimateBpm(sig: { t: number; v: number }[]): number {
   }
   const std = Math.sqrt(sm.reduce((a, x) => a + x * x, 0) / sm.length) || 1;
   const thr = std * 0.45;
-  const minGapMs = 300; // max ~200 BPM
+  const minGapMs = 300;
   const peaks: number[] = [];
   for (let i = 2; i < sm.length - 2; i++) {
     if (sm[i] > thr && sm[i] > sm[i - 1] && sm[i] >= sm[i + 1] && sm[i] > sm[i - 2] && sm[i] >= sm[i + 2]) {
@@ -84,7 +78,6 @@ function estimateBpm(sig: { t: number; v: number }[]): number {
     }
   }
   if (peaks.length < 4) return 0;
-  // aykırı aralıkları at, medyan-benzeri ortalama
   const intervals: number[] = [];
   for (let i = 1; i < peaks.length; i++) intervals.push(times[peaks[i]] - times[peaks[i - 1]]);
   intervals.sort((a, b) => a - b);
@@ -96,21 +89,17 @@ function estimateBpm(sig: { t: number; v: number }[]): number {
 }
 
 export default function Page() {
-  // akış: idle → measuring → reset → measuring → proof
   const [phase, setPhase] = useState<'idle' | 'measuring' | 'reset' | 'proof'>('idle');
   const [stage, setStage] = useState<1 | 2>(1);
   const [stressBpm, setStressBpm] = useState(0);
   const [calmBpm, setCalmBpm] = useState(0);
 
-  // ölçüm ekranı
   const [liveBpm, setLiveBpm] = useState(0);
   const [measProgress, setMeasProgress] = useState(0);
   const [fingerOk, setFingerOk] = useState(false);
-  const [quality, setQuality] = useState(0);
   const [liveWave, setLiveWave] = useState<number[]>([]);
   const [statusText, setStatusText] = useState('');
 
-  // reset ekranı
   const [breathScale, setBreathScale] = useState(0.6);
   const [breathLabel, setBreathLabel] = useState('Hazır ol');
   const [breathKey, setBreathKey] = useState('rest');
@@ -118,20 +107,19 @@ export default function Page() {
   const [secondsLeft, setSecondsLeft] = useState(RESET_DURATION);
   const [soundOn, setSoundOn] = useState(false);
 
-  // proof
   const [cityBeats, setCityBeats] = useState(0);
   const [revealT, setRevealT] = useState(0);
 
   const [demoMode, setDemoMode] = useState(false);
   const [usedFallback, setUsedFallback] = useState(false);
 
-  // refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const sampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const signalRef = useRef<{ t: number; v: number }[]>([]);
   const measuringRef = useRef(false);
   const measRafRef = useRef(0);
+  const stressBpmRef = useRef(0);
 
   const ctxRef = useRef<any>(null);
   const songRef = useRef<any>(null);
@@ -141,12 +129,11 @@ export default function Page() {
   const lastKeyRef = useRef('rest');
   const bellIdxRef = useRef(0);
 
-  // rAF köprüleri
   const breathRef = useRef(0.6);
   const bpmRef = useRef(80);
   const playingRef = useRef(false);
   const rippleRef = useRef<{ t: number }[]>([]);
-  const resetBpmRef = useRef(92); // sadece nabız çizgisi hızı için
+  const resetBpmRef = useRef(92);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const reducedRef = useRef(false);
@@ -295,36 +282,34 @@ export default function Page() {
     streamRef.current = null;
   }, []);
 
-  /* ── Ölçüm bitti → sonucu işle ── */
-  const onMeasured = useCallback((bpm: number, fallback: boolean) => {
+  /* ── Akış fonksiyonları (function = hoisting; karşılıklı çağrı sorunsuz) ── */
+
+  function onMeasured(bpm: number, fallback: boolean, whichStage: 1 | 2) {
     setUsedFallback(fallback);
-    if (stage === 1) {
+    if (whichStage === 1) {
       const val = bpm || (88 + Math.round(Math.random() * 6));
       setStressBpm(val);
+      stressBpmRef.current = val;
       resetBpmRef.current = val;
       closeCamera();
-      // kısa nefes, sonra sakinleşme
       setTimeout(() => startReset(val), 700);
     } else {
       let val = bpm;
       if (!val) {
-        // ölçülemedi → sakinleşme sonrası inandırıcı düşüş
-        val = Math.max(64, stressBpm - (16 + Math.round(Math.random() * 6)));
+        val = Math.max(64, (stressBpmRef.current || 92) - (16 + Math.round(Math.random() * 6)));
         setUsedFallback(true);
       }
       setCalmBpm(val);
       closeCamera();
       setTimeout(() => startProof(), 500);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, stressBpm, closeCamera]);
+  }
 
-  /* ── Gerçek PPG ölçüm döngüsü ── */
-  const runRealMeasurement = useCallback(() => {
+  function runRealMeasurement(whichStage: 1 | 2) {
     const v = videoRef.current, cv = sampleCanvasRef.current;
-    if (!v || !cv) { onMeasured(0, true); return; }
+    if (!v || !cv) { onMeasured(0, true, whichStage); return; }
     const cx = cv.getContext('2d', { willReadFrequently: true } as any);
-    if (!cx) { onMeasured(0, true); return; }
+    if (!cx) { onMeasured(0, true, whichStage); return; }
     const W = cv.width, H = cv.height;
     signalRef.current = [];
     measuringRef.current = true;
@@ -340,22 +325,19 @@ export default function Page() {
       try {
         const d = cx.getImageData(0, 0, W, H).data;
         for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; cnt++; }
-      } catch (e) { onMeasured(0, true); return; }
+      } catch (e) { onMeasured(0, true, whichStage); return; }
       r /= cnt; g /= cnt; b /= cnt;
       total++;
       const finger = r > 90 && r > g * 1.35 && r > b * 1.35;
       if (finger) fingerFrames++;
       if (finger) signalRef.current.push({ t: now, v: r });
-
       const elapsed = now - startT;
 
-      // UI ~20fps
       if (now - lastUi > 50) {
         lastUi = now;
         setMeasProgress(clamp01(elapsed / MEASURE_MS_REAL));
         setFingerOk(finger);
         setStatusText(finger ? 'Sabit tut…' : 'Parmağını kamera + flaşın üstüne koy');
-        // canlı dalga (son ~90 örnek, detrend)
         const s = signalRef.current;
         if (s.length > 8) {
           const seg = s.slice(-90).map((x) => x.v);
@@ -363,16 +345,12 @@ export default function Page() {
           let mx = 1e-6;
           const centered = seg.map((x) => { const c = x - mean; mx = Math.max(mx, Math.abs(c)); return c; });
           setLiveWave(centered.map((c) => c / mx));
-          bpmRef.current = liveBpm || 80;
         }
       }
-      // canlı BPM ~her 1.3 sn
       if (elapsed > 4000 && now - lastBpmCalc > 1300) {
         lastBpmCalc = now;
         const est = estimateBpm(signalRef.current);
-        if (est) setLiveBpm(est);
-        const q = clamp01(fingerFrames / Math.max(1, total));
-        setQuality(q);
+        if (est) { setLiveBpm(est); bpmRef.current = est; }
       }
 
       if (elapsed >= MEASURE_MS_REAL) {
@@ -380,17 +358,15 @@ export default function Page() {
         const est = estimateBpm(signalRef.current);
         const fingerRatio = fingerFrames / Math.max(1, total);
         const good = est >= 45 && est <= 180 && fingerRatio > 0.55;
-        onMeasured(good ? est : 0, !good);
+        onMeasured(good ? est : 0, !good, whichStage);
         return;
       }
       measRafRef.current = requestAnimationFrame(loop);
     };
     measRafRef.current = requestAnimationFrame(loop);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onMeasured, liveBpm]);
+  }
 
-  /* ── Demo (sahte ama gerçekçi) ölçüm ── */
-  const runDemoMeasurement = useCallback((target: number) => {
+  function runDemoMeasurement(target: number, whichStage: 1 | 2) {
     measuringRef.current = true;
     setStatusText('Parmağını kameraya koy');
     setFingerOk(true);
@@ -402,11 +378,8 @@ export default function Page() {
       const elapsed = now - startT;
       const t = clamp01(elapsed / MEASURE_MS_DEMO);
       setMeasProgress(t);
-      // ısınan tahmin: hedefe yaklaş + gürültü
       const noisy = target + Math.round((1 - t) * 12 * (Math.random() - 0.5)) + Math.round((Math.random() - 0.5) * 2);
       setLiveBpm(Math.max(50, noisy));
-      setQuality(clamp01(t * 1.2));
-      // sentetik dalga (hedef frekansta sinüs + hafif gürültü)
       const f = target / 60;
       const val = Math.sin((elapsed / 1000) * f * 2 * Math.PI) * 0.8 + (Math.random() - 0.5) * 0.15;
       wave.push(val); if (wave.length > 90) wave.shift();
@@ -414,37 +387,34 @@ export default function Page() {
       bpmRef.current = target;
       if (elapsed >= MEASURE_MS_DEMO) {
         measuringRef.current = false;
-        onMeasured(target, false);
+        onMeasured(target, false, whichStage);
         return;
       }
       measRafRef.current = requestAnimationFrame(step);
     };
     measRafRef.current = requestAnimationFrame(step);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onMeasured]);
+  }
 
-  /* ── Ölçümü başlat (stage 1 veya 2) ── */
-  const startMeasure = useCallback(async (which: 1 | 2) => {
+  async function startMeasure(which: 1 | 2) {
     setStage(which);
     setPhase('measuring');
-    setLiveBpm(0); setMeasProgress(0); setFingerOk(false); setQuality(0); setLiveWave([]);
+    setLiveBpm(0); setMeasProgress(0); setFingerOk(false); setLiveWave([]);
     playingRef.current = false;
-    const target = which === 1 ? (90 + Math.round(Math.random() * 5)) : Math.max(66, (stressBpm || 92) - (17 + Math.round(Math.random() * 6)));
-    if (demoRef.current) { runDemoMeasurement(target); return; }
+    const target = which === 1
+      ? (90 + Math.round(Math.random() * 5))
+      : Math.max(66, (stressBpmRef.current || 92) - (17 + Math.round(Math.random() * 6)));
+    if (demoRef.current) { runDemoMeasurement(target, which); return; }
     const ok = await openCamera();
     if (!ok) {
       setStatusText('Kameraya erişilemedi — demo gösteriliyor');
       setUsedFallback(true);
-      runDemoMeasurement(target);
+      runDemoMeasurement(target, which);
       return;
     }
-    // kameraya alışması için kısa gecikme
-    setTimeout(() => { if (phase !== 'idle' || which === 1) runRealMeasurement(); }, 600);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stressBpm, openCamera, runRealMeasurement, runDemoMeasurement]);
+    setTimeout(() => runRealMeasurement(which), 600);
+  }
 
-  /* ── Sakinleşme (nefes + müzik) ── */
-  const startReset = useCallback((fromBpm: number) => {
+  function startReset(fromBpm: number) {
     if (tickRef.current) clearInterval(tickRef.current);
     if (bellTimerRef.current) clearTimeout(bellTimerRef.current);
     setPhase('reset');
@@ -465,10 +435,8 @@ export default function Page() {
       const t = clamp01(elapsed / RESET_DURATION);
       setResetProgress(t);
       setSecondsLeft(Math.max(0, Math.ceil(RESET_DURATION - elapsed)));
-      // nabız çizgisi hızı: yumuşakça in (sadece görsel)
       resetBpmRef.current = fromBpm - (fromBpm - 66) * easeOut(t);
       bpmRef.current = resetBpmRef.current;
-
       const b = breathAt(elapsed);
       setBreathScale(b.scale); setBreathLabel(b.label); setBreathKey(b.key);
       breathRef.current = b.scale;
@@ -489,15 +457,12 @@ export default function Page() {
         stopSong(true);
         setBreathLabel('');
         try { if (navigator.vibrate) navigator.vibrate([40, 60, 40]); } catch (e) {}
-        // ikinci ölçüm
         setTimeout(() => startMeasure(2), 600);
       }
     }, 80);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startSong, stopSong, startMeasure]);
+  }
 
-  /* ── Kanıt ekranı ── */
-  const startProof = useCallback(() => {
+  function startProof() {
     setPhase('proof');
     setRevealT(0);
     const t0 = Date.now();
@@ -514,10 +479,9 @@ export default function Page() {
       if (p < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
-  }, []);
+  }
 
-  const begin = useCallback(() => {
-    // ses için kullanıcı jesti — context'i uyandır
+  function begin() {
     try {
       const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (AC && !ctxRef.current) ctxRef.current = new AC();
@@ -525,7 +489,7 @@ export default function Page() {
     } catch (e) {}
     setStressBpm(0); setCalmBpm(0); setUsedFallback(false);
     startMeasure(1);
-  }, [startMeasure]);
+  }
 
   const sharePulse = useCallback(() => {
     const text = `Nabzımı ${stressBpm}'den ${calmBpm}'e düşürdüm 🫀 Sen de dene — NABIZ.`;
@@ -534,7 +498,6 @@ export default function Page() {
     else if (nav.clipboard) { nav.clipboard.writeText(text); setStatusText('Kopyalandı'); }
   }, [stressBpm, calmBpm]);
 
-  // temizlik
   useEffect(() => () => {
     if (tickRef.current) clearInterval(tickRef.current);
     if (measRafRef.current) cancelAnimationFrame(measRafRef.current);
@@ -553,13 +516,11 @@ export default function Page() {
   const R = 130, CIRC = 2 * Math.PI * R;
   const dropped = stressBpm && calmBpm ? stressBpm - calmBpm : 0;
 
-  // ölçüm dalgası → SVG polyline
   const waveW = 260, waveH = 90;
   const measWavePts = liveWave.length > 1
     ? liveWave.map((v, i) => `${((i / (liveWave.length - 1)) * waveW).toFixed(1)},${(waveH / 2 - v * (waveH / 2 - 6)).toFixed(1)}`).join(' ')
     : `0,${waveH / 2} ${waveW},${waveH / 2}`;
 
-  // reset kalp çizgisi (sivri→yumuşak)
   const rAmp = 1 - 0.7 * calm;
   const yy = (o: number) => (50 + o * rAmp).toFixed(1);
   const resetWave = `0,50 140,50 168,${yy(-28)} 184,${yy(40)} 200,${yy(-42)} 216,${yy(28)} 232,${yy(-10)} 250,50 500,50`;
@@ -574,6 +535,7 @@ export default function Page() {
       transition: 'background 1.2s ease',
     }}>
       <style>{`
+        button{-webkit-tap-highlight-color:transparent;-webkit-appearance:none;appearance:none;touch-action:manipulation;cursor:pointer}
         @keyframes glowPulse{0%,100%{opacity:.35}50%{opacity:.6}}
         @keyframes softPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
         @keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
@@ -586,18 +548,15 @@ export default function Page() {
         @media (prefers-reduced-motion: reduce){.glow,.btnp,.fin{animation:none!important}}
       `}</style>
 
-      {/* gizli kamera + örnekleme tuvali */}
       <video ref={videoRef} playsInline muted style={{
         position: 'absolute', width: 1, height: 1, opacity: 0.001, pointerEvents: 'none', zIndex: -1,
       }} />
       <canvas ref={sampleCanvasRef} width={64} height={48} style={{ display: 'none' }} />
 
-      {/* parçacık aurası */}
-      <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 0 }} />
+      <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 0, pointerEvents: 'none' }} />
       <div style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none',
         background: 'radial-gradient(120% 100% at 50% 45%, transparent 55%, rgba(0,0,0,0.45) 100%)' }} />
 
-      {/* üst marka */}
       <div style={{ position: 'absolute', top: 16, left: 0, right: 0, textAlign: 'center', fontSize: 11, letterSpacing: 4, color: 'rgba(196,181,253,0.55)', zIndex: 3 }}>
         M I N D G L O W
       </div>
@@ -607,7 +566,6 @@ export default function Page() {
         </div>
       )}
 
-      {/* ══ IDLE ══ */}
       {phase === 'idle' && (
         <div className="fin" style={{ textAlign: 'center', padding: '0 24px', zIndex: 2 }}>
           <p style={{ color: '#C4B5FD', fontWeight: 300, marginBottom: 6, fontSize: 15 }}>Sınav stresi görünmezdir.</p>
@@ -619,7 +577,7 @@ export default function Page() {
               points="0,50 150,50 170,18 200,92 230,8 260,82 280,50 500,50" />
           </svg>
           <div>
-            <button onClick={begin} className="btnp" style={{
+            <button type="button" onClick={begin} className="btnp" style={{
               padding: '17px 44px', background: '#FB7185', color: '#fff', border: 'none',
               borderRadius: 999, fontSize: 18, fontWeight: 600, cursor: 'pointer',
               boxShadow: '0 0 40px rgba(251,113,133,0.5)',
@@ -627,12 +585,8 @@ export default function Page() {
               Nabzını Ölç
             </button>
           </div>
-          <p style={{ marginTop: 26, fontSize: 12, color: '#8B5CF6', letterSpacing: 2 }}>
-            ÖLÇ · SAKİNLEŞ · TEKRAR ÖLÇ
-          </p>
-
-          {/* demo modu */}
-          <button onClick={() => setDemoMode((d) => !d)} style={{
+          <p style={{ marginTop: 26, fontSize: 12, color: '#8B5CF6', letterSpacing: 2 }}>ÖLÇ · SAKİNLEŞ · TEKRAR ÖLÇ</p>
+          <button type="button" onClick={() => setDemoMode((d) => !d)} style={{
             marginTop: 30, padding: '7px 16px', borderRadius: 999, cursor: 'pointer', fontSize: 12,
             border: `1px solid ${demoMode ? '#FB7185' : 'rgba(139,92,246,0.4)'}`,
             background: demoMode ? 'rgba(251,113,133,0.12)' : 'transparent',
@@ -646,35 +600,29 @@ export default function Page() {
         </div>
       )}
 
-      {/* ══ MEASURING ══ */}
       {phase === 'measuring' && (
         <div className="fin" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 24px', zIndex: 2 }}>
           <p style={{ fontSize: 12, letterSpacing: 4, color: '#8B5CF6', marginBottom: 10 }}>
             {stage === 1 ? 'STRES NABZIN' : 'YENİDEN ÖLÇÜM'}
           </p>
-
           <div style={{ position: 'relative', width: 300, height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {/* ilerleme halkası */}
             <svg width={300} height={300} viewBox="0 0 300 300" style={{ position: 'absolute', transform: 'rotate(-90deg)' }}>
               <circle cx="150" cy="150" r={R} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3" />
               <circle cx="150" cy="150" r={R} fill="none" stroke="#FB7185" strokeWidth="3" strokeLinecap="round"
                 strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - measProgress)}
                 style={{ transition: 'stroke-dashoffset .12s linear' }} />
             </svg>
-            {/* parmak durumu halesi */}
             <div className="glow" style={{
               position: 'absolute', width: 210, height: 210, borderRadius: '50%',
               background: fingerOk ? '#FB7185' : '#5B4FE0', filter: 'blur(46px)',
               opacity: fingerOk ? 0.5 : 0.25, transition: 'background .4s, opacity .4s',
             }} />
-            {/* canlı dalga */}
             <svg width={waveW} height={waveH} viewBox={`0 0 ${waveW} ${waveH}`} style={{
               position: 'relative', filter: 'drop-shadow(0 0 14px rgba(251,113,133,0.6))',
             }}>
               <polyline fill="none" stroke="#FB7185" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" points={measWavePts} />
             </svg>
           </div>
-
           <div style={{ marginTop: 18, display: 'flex', alignItems: 'baseline', gap: 8, height: 74 }}>
             {liveBpm > 0 ? (
               <>
@@ -685,7 +633,6 @@ export default function Page() {
               <span style={{ fontSize: 24, color: '#C4B5FD', fontWeight: 300, animation: 'blink 1.4s infinite' }}>ölçülüyor…</span>
             )}
           </div>
-
           <div style={{
             marginTop: 6, padding: '8px 18px', borderRadius: 999,
             background: fingerOk ? 'rgba(251,113,133,0.12)' : 'rgba(139,92,246,0.12)',
@@ -700,7 +647,6 @@ export default function Page() {
         </div>
       )}
 
-      {/* ══ RESET (nefes + müzik) ══ */}
       {phase === 'reset' && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 24px', zIndex: 2 }}>
           <p style={{ marginBottom: 22, fontSize: 24, fontWeight: 300, letterSpacing: 5, height: 32, color: phaseColor, transition: 'color .5s' }}>
@@ -738,12 +684,9 @@ export default function Page() {
         </div>
       )}
 
-      {/* ══ PROOF (önce/sonra) ══ */}
       {phase === 'proof' && (
         <div className="fin" style={{ textAlign: 'center', padding: '0 24px', zIndex: 2, width: '100%', maxWidth: 460 }}>
           <p style={{ fontSize: 12, letterSpacing: 4, color: '#8B5CF6', marginBottom: 18 }}>KANIT · KENDİ NABZIN</p>
-
-          {/* önce → sonra */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 18, marginBottom: 8 }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: 44, fontWeight: 700, color: 'rgba(245,243,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>{stressBpm}</div>
@@ -755,7 +698,6 @@ export default function Page() {
               <div style={{ fontSize: 11, color: '#FB7185', letterSpacing: 2 }}>SONRA</div>
             </div>
           </div>
-
           <div style={{
             display: 'inline-block', marginBottom: 18, padding: '6px 16px', borderRadius: 999,
             background: 'rgba(251,113,133,0.14)', border: '1px solid rgba(251,113,133,0.4)',
@@ -763,15 +705,10 @@ export default function Page() {
           }}>
             −{dropped} BPM
           </div>
-
           <h2 style={{ fontSize: 24, fontWeight: 600, marginBottom: 6, color: '#F5F3FF' }}>
             Kalbin <span style={{ color: '#FB7185' }}>{dropped} atış</span> yavaşladı.
           </h2>
-          <p style={{ color: '#C4B5FD', fontWeight: 300, fontSize: 14, marginBottom: 22 }}>
-            İddia yok — sadece kendi bedenin.
-          </p>
-
-          {/* birlikte yavaşlıyoruz */}
+          <p style={{ color: '#C4B5FD', fontWeight: 300, fontSize: 14, marginBottom: 22 }}>İddia yok — sadece kendi bedenin.</p>
           <div style={{ borderRadius: 18, border: '1px solid rgba(139,92,246,0.25)', background: 'rgba(255,255,255,0.03)', padding: '18px 26px', marginBottom: 8 }}>
             <p style={{ fontSize: 10, letterSpacing: 3, color: '#8B5CF6', marginBottom: 6 }}>BİRLİKTE YAVAŞLIYORUZ · İSTANBUL · BUGÜN</p>
             <p style={{ fontSize: 34, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{cityBeats.toLocaleString('tr-TR')}</p>
@@ -779,26 +716,22 @@ export default function Page() {
               atış yavaşlatıldı · <span style={{ color: '#FB7185' }}>+ senin nabzın</span>
             </p>
           </div>
-
           <p style={{ color: '#8B5CF6', fontWeight: 300, fontSize: 14, marginTop: 22 }}>Kulaklığını tak — gerisini bize bırak.</p>
-
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 22, flexWrap: 'wrap' }}>
-            <button onClick={sharePulse} style={{
+            <button type="button" onClick={sharePulse} style={{
               padding: '11px 26px', border: 'none', background: '#FB7185', color: '#fff',
               borderRadius: 999, fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: '0 0 24px rgba(251,113,133,0.4)',
             }}>
               Nabzını Yolla
             </button>
-            <button onClick={begin} style={{
+            <button type="button" onClick={begin} style={{
               padding: '11px 22px', border: '1px solid rgba(139,92,246,0.5)', background: 'transparent',
               color: '#C4B5FD', borderRadius: 999, fontSize: 14, cursor: 'pointer',
             }}>
               Tekrar
             </button>
           </div>
-          <p style={{ marginTop: 20, fontSize: 10, color: 'rgba(139,92,246,0.45)', letterSpacing: 2 }}>
-            MINDGLOW · UZMAN PSİKOLOG ONAYLI
-          </p>
+          <p style={{ marginTop: 20, fontSize: 10, color: 'rgba(139,92,246,0.45)', letterSpacing: 2 }}>MINDGLOW · UZMAN PSİKOLOG ONAYLI</p>
         </div>
       )}
 
