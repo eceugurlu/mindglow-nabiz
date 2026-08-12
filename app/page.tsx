@@ -308,7 +308,7 @@ export default function Page() {
   function runRealMeasurement(whichStage: 1 | 2) {
     const v = videoRef.current, cv = sampleCanvasRef.current;
     if (!v || !cv) { onMeasured(0, true, whichStage); return; }
-    const cx = cv.getContext('2d', { willReadFrequently: true } as any);
+    const cx = cv.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D | null;
     if (!cx) { onMeasured(0, true, whichStage); return; }
     const W = cv.width, H = cv.height;
     signalRef.current = [];
